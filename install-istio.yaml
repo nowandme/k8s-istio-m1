@@ -1,0 +1,92 @@
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+spec:
+  hub: docker.io/querycapistio # For ARM support
+  profile: demo
+  components:
+    base:
+      enabled: true
+    cni:
+      enabled: false #docker.io/querycapistio does not have CNI support
+    pilot:
+      enabled: true
+      k8s: # each components have to set this
+        affinity: &affinity
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - preference:
+                  matchExpressions:
+                    - key: beta.kubernetes.io/arch
+                      operator: In
+                      values:
+                        - arm64
+                        - amd64
+                weight: 2
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: beta.kubernetes.io/arch
+                      operator: In
+                      values:
+                        - arm64
+                        - amd64
+        hpaSpec:
+          maxReplicas: 1
+        overlays:
+          - apiVersion: policy/v1beta1
+            kind: PodDisruptionBudget
+            name: istiod
+            patches:
+              - path: spec.minAvailable
+                value: 0
+    egressGateways:
+      - name: istio-egressgateway
+        enabled: false
+        k8s:
+          affinity: *affinity
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          affinity: *affinity
+          hpaSpec:
+            maxReplicas: 1
+          nodeSelector:
+            ingress-ready: "true"
+          service:
+            type: NodePort
+          overlays:
+            - apiVersion: v1
+              kind: Service
+              name: istio-ingressgateway
+              patches:
+                - path: spec.ports
+                  value:
+                    - name: status-port
+                      port: 15021
+                      targetPort: 15021
+                      nodePort: 30002
+                    - name: http2
+                      port: 80
+                      targetPort: 8080
+                      nodePort: 30000
+                    - name: https
+                      port: 443
+                      targetPort: 8443
+                      nodePort: 30001
+            - apiVersion: policy/v1beta1
+              kind: PodDisruptionBudget
+              name: istio-ingressgateway
+              patches:
+                - path: spec.minAvailable
+                  value: 0
+  meshConfig:
+    accessLogFile: "/dev/stdout"
+    accessLogEncoding: "JSON"
+  values:
+    cni:
+      excludeNamespaces:
+        - istio-system
+        - kube-system
+    sidecarInjectorWebhook:
+      rewriteAppHTTPProbe: true
